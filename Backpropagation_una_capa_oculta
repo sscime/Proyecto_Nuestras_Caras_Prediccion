@@ -6,3 +6,197 @@ import matplotlib.pyplot as plt
 from mlxtend.preprocessing import standardize
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelBinarizer
+
+def func_eval(fname, x):
+    match fname:
+        case "purelin":
+            y = x
+        case "logsig":
+            y = 1.0 / ( 1.0 + math.exp(-x) )
+        case "tansig":
+            y = 2.0 / ( 1.0 + math.exp(-2.0*x) ) - 1.0
+    return y
+    
+def deriv_eval(fname, y):  # Atención que y es la entrada y=f( x )
+    match fname:
+        case "purelin":
+            d = 1.0
+        case "logsig":
+            d = y*(1.0-y)
+        case "tansig":
+            d = 1.0 - y*y
+    return d 
+# Vectorizar la función para poder pasarle un vector para los cálculos
+func_eval_vec = np.vectorize(func_eval)
+
+# Vectorizar la función para poder pasarle un vector para los cálculos
+deriv_eval_vec = np.vectorize(deriv_eval)
+
+
+entrada = np.load("x_pca.npy")
+# Pasar las listas a numpy
+X = np.array(entrada)
+
+
+# lectura de archivo con nombres (var respuesta)
+nombres = np.load("nombres.npy")
+
+# Convertir los valores de la var categórica en números
+Y = LabelBinarizer().fit_transform(nombres)
+
+# Definición de parámetros de la red neuronal
+filas_qty = len(X)
+input_size = X.shape[1]   # 2 entradas
+hidden_size = 15  # neuronas capa oculta
+output_size = Y.shape[1]  # neuronas de salida
+
+
+# Definir las funciones de activación de cada capa
+hidden_FUNC = 'logsig'  # usamos la logistica
+output_FUNC = 'logsig'  # usamos la logistica
+
+# Incializar las matrices de pesos azarosamente
+# W1 son los pesos que van del input a la capa oculta
+# W2 son los pesos que van de la capa oculta a la capa de salida
+np.random.seed(1021) # Usamos la querida random seed Denicolay para que las corridas sean reproducibles
+
+W1 = np.random.uniform(-0.5, 0.5, [hidden_size, input_size])
+X01 = np.random.uniform(-0.5, 0.5, [hidden_size, 1] )
+W2 = np.random.uniform(-0.5, 0.5, [output_size, hidden_size])
+X02 = np.random.uniform(-0.5, 0.5, [output_size, 1] )
+
+# Avanzo la red, forward
+# para TODOS los X al mismo tiempo ! 
+#  @ hace el producto de una matrix por un vector_columna
+hidden_estimulos = W1 @ X.T + X01
+# hidden_estimulos = hidden_estimulos.round(3)
+hidden_salidas = func_eval_vec(hidden_FUNC, hidden_estimulos)
+output_estimulos = W2 @ hidden_salidas + X02
+output_salidas = func_eval_vec(output_FUNC, output_estimulos)
+
+# Calcular el error promedio general de TODOS los X
+Error= np.mean( (Y.T - output_salidas)**2 )
+print(f"Error inicial {Error}")
+
+# Inicializar
+epoch_limit = 2000    # Para terminar si no converge
+Error_umbral = 1.0e-06
+learning_rate = 0.2
+Error_last = 10    # Poner algo dist a 0 la primera vez
+epoch = 0
+
+while ( math.fabs(Error_last-Error)>Error_umbral and (epoch < epoch_limit)):
+    epoch += 1
+    Error_last = Error
+
+    # Recorrer siempre TODA la entrada
+    for fila in range(filas_qty): # Para cada input x_sub_fila del vector X
+        # Propagar el x hacia adelante
+        hidden_estimulos = W1 @ X[fila:fila+1, :].T + X01
+        hidden_salidas = func_eval_vec(hidden_FUNC, hidden_estimulos)
+        output_estimulos = W2 @ hidden_salidas + X02
+        output_salidas = func_eval_vec(output_FUNC, output_estimulos)
+
+        # Calcular los errores en la capa hidden y la capa output
+        ErrorSalida = Y[fila:fila+1,:].T - output_salidas
+        # output_delta es un sólo número
+        output_delta = ErrorSalida * deriv_eval_vec(output_FUNC, output_salidas)
+        # hidden_delta es un vector columna
+        hidden_delta = deriv_eval_vec(hidden_FUNC, hidden_salidas)*(W2.T @ output_delta)
+
+        # Ya tenemos los errores que comete cada capa
+        # corregir matrices de pesos, vamos hacia atrás
+        # backpropagation
+        W1 = W1 + learning_rate * (hidden_delta @ X[fila:fila+1, :] )
+        X01 = X01 + learning_rate * hidden_delta
+        W2 = W2 + learning_rate * (output_delta @ hidden_salidas.T)
+        X02 = X02 + learning_rate * output_delta
+
+    # Ya recalculamos las matrices de pesos
+    # ahora avanzamos la red, feed-forward
+    hidden_estimulos = W1 @ X.T + X01
+    hidden_salidas = func_eval_vec(hidden_FUNC, hidden_estimulos)
+    output_estimulos = W2 @ hidden_salidas + X02
+    output_salidas = func_eval_vec(output_FUNC, output_estimulos)
+
+    # Calcular el error promedio general de TODOS los X
+    Error= np.mean( (Y.T - output_salidas)**2 )
+    
+    print("Epoch:", epoch)
+    print("Error:", Error)
+    
+    # Lectura de archivo con var target
+X_test = np.load("x_pca_test.npy")
+
+# Lectura de archivo con nombres (var respuesta)
+nombres_test = np.load("nombres_test.npy")
+
+# Convertir los valores de la var categórica en números
+y_test = LabelBinarizer().fit_transform(nombres_test)
+
+# Son los distintos nombres
+nom = np.unique(nombres)
+
+rta_ok = 0
+
+# Realizamos predicciones de 23 fotos nuevas de testeo que no se encontraban en el set 
+# de datos del entrenamiento
+
+for fila in range(X_test.shape[0]):
+    
+    # Realizamos el cálculo utilizando las matrices óptimas W1 y W2
+    hidden_estimulos_predict = W1 @ X_test[fila:fila + 1, :].T + X01
+    hidden_salidas_predict = func_eval_vec(hidden_FUNC, hidden_estimulos_predict)
+    output_estimulos_predict = W2 @ hidden_salidas_predict + X02
+    output_salidas_predict = func_eval_vec(output_FUNC, output_estimulos_predict)
+
+    # Obtenemos el nombre correspondiente al registro de la foto a la salida de la red
+    pos_max = np.argmax(output_salidas_predict) 
+
+    #print("posicion de lo estimado",pos_max)
+    #print("posic en y_test",np.argmax(y_test[fila]))
+    
+    
+    if ( nom[np.argmax(y_test[fila])] == nom[pos_max]):
+        rta_predic = "Ok"
+        rta_ok = rta_ok + 1
+    else:
+        rta_predic = ""
+
+    print("En la foto a predecir de: ", nom[np.argmax(y_test[fila])], ", predijo: ",nom[pos_max], rta_predic)
+
+
+print("La cantidad de predicciones correctas fueron ", rta_ok, " de ", X_test.shape[0] )
+
+import pandas as pd
+
+# Crear una lista para almacenar los resultados de cada predicción
+resultados = []
+
+for fila in range(X_test.shape[0]):
+    # Realizar la predicción
+    hidden_estimulos_predict = W1 @ X_test[fila:fila + 1, :].T + X01
+    hidden_salidas_predict = func_eval_vec(hidden_FUNC, hidden_estimulos_predict)
+    output_estimulos_predict = W2 @ hidden_salidas_predict + X02
+    output_salidas_predict = func_eval_vec(output_FUNC, output_estimulos_predict)
+    pos_max = np.argmax(output_salidas_predict)
+
+    # Verificar si la predicción es correcta
+    prediccion_correcta = nom[np.argmax(y_test[fila])] == nom[pos_max]
+    
+    # Agregar el resultado a la lista
+    resultados.append({'Foto': fila+1,
+                       'Clase Real': nom[np.argmax(y_test[fila])],
+                       'Clase Predicha': nom[pos_max],
+                       'Predicción Correcta': prediccion_correcta})
+
+# Crear la tabla con los resultados
+tabla_resultados = pd.DataFrame(resultados)
+
+# Reemplazar los valores de las etiquetas en la columna "Clase Real"
+nuevos_valores = {'ad': 'Andres', 'cp': 'Claudia','ec': 'Elemir','ep': 'Eduardo','fh': 'Fernanda','gf': 'Geronimo','hg': 'Hernan','ja': 'Julieta','jm': 'Jiang','jp': 'Josefina','jt': 'Joaquin','lm': 'Lujan','mf': 'Maribel','mg': 'Marcelo G.','mk': 'Marisa','ml': 'Maira','mt': 'Marcelo T.','nl': 'Nestor','ob': 'Oscar','rb': 'Ramon','re': 'Rodrigo','sp': 'Sebastian','ss': 'Silvia'}
+tabla_resultados['Clase Real'].replace(nuevos_valores, inplace=True)
+tabla_resultados['Clase Predicha'].replace(nuevos_valores, inplace=True)
+
+# Mostrar la tabla
+print(tabla_resultados)
